@@ -7,22 +7,20 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 
-const genAI=new GoogleGenerativeAI(process.env.GEMINI_API_KEY)
+const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-const serializeAmount=(obj)=>(
-    {
-         ...obj,
-    amount:obj.amount.toNumber(),
-    }
-)
-export async function createTransaction(data){
-    try {
-        const { userId } = await auth();
-        if (!userId) throw new Error("Unauthorized");
-       
-         
-    const reqHeaders = headers();
-    const req = new Request("https://your.api/endpoint", { headers: reqHeaders });
+const serializeAmount = (obj) => ({
+  ...obj,
+  amount: obj.amount.toNumber(),
+});
+
+export async function createTransaction(data) {
+  try {
+    const { userId } = await auth();
+    if (!userId) throw new Error("Unauthorized");
+
+    const reqHeaders = await headers(); // ✅ FIXED: Await headers
+    const req = new Request("http://internal/transaction", { headers: reqHeaders });
 
     const decision = await aj.protect(req, {
       userId,
@@ -41,54 +39,46 @@ export async function createTransaction(data){
       throw new Error("Request Blocked");
     }
 
+    const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+    if (!user) throw new Error("User not found");
 
+    const account = await db.account.findUnique({
+      where: { id: data.accountId, userId: user.id },
+    });
+    if (!account) throw new Error("Account not found");
 
-        const user = await db.user.findUnique({
-            where: { clerkUserId: userId },
-        });
-        if (!user) {
-            throw new Error("User Not found");
-        } 
+    const balanceChange = data.type === "EXPENSE" ? -data.amount : data.amount;
+    const newBalance = account.balance.toNumber() + balanceChange;
 
-        const account=await db.account.findUnique({
-            where:{
-                id:data.accountId,
-                userId:user.id,
-            },
-        });
-        if(!account){
-            throw new Error("Account not found");
-        }
-        const balanceChange=data.type==="EXPENSE"?-data.amount:data.amount;
-        const newBalance=account.balance.toNumber()+balanceChange;
+    const transaction = await db.$transaction(async (tx) => {
+      const newTransaction = await tx.transaction.create({
+        data: {
+          ...data,
+          userId: user.id,
+          nextRecurringDate:
+            data.isRecurring && data.recurringInterval
+              ? calculateNextRecurringDate(data.date, data.recurringInterval)
+              : null,
+        },
+      });
 
+      await tx.account.update({
+        where: { id: data.accountId },
+        data: { balance: newBalance },
+      });
 
-        const transaction=await db.$transaction(async (tx)=>{
-            const newTransaction=await tx.transaction.create({
-                data:{
-                    ...data,
-                    userId:user.id,
-                    nextRecurringDate:data.isRecurring&&data.recurringInterval?
-                    calculateNextRecurringDate(data.date,data.recurringInterval):null,
+      return newTransaction;
+    });
 
-                },
+    revalidatePath("/dashboard");
+    revalidatePath(`/account/${transaction.accountId}`);
 
-            });
-
-            await tx.account.update({
-                where:{id:data.accountId},
-                data:{balance:newBalance},
-            })
-            return newTransaction;
-        })
-        revalidatePath("/dashboard");
-        revalidatePath(`/account/${transaction.accountId}`)
-
-        return {success:true,data:serializeAmount(transaction)};
-    } catch (error) {
-        throw new Error(error.message);
-    }
+    return { success: true, data: serializeAmount(transaction) };
+  } catch (error) {
+    throw new Error(error.message);
+  }
 }
+
 function calculateNextRecurringDate(startDate, interval) {
   const date = new Date(startDate);
 
@@ -119,9 +109,9 @@ export async function scanReciept({ base64, mimetype }) {
       - Date (in ISO format)
       - Description or items purchased (brief summary)
       - Merchant/store name
-      - Suggested category (one of: housing, transportation, groceries, utilities, entertainment, food, shopping, healthcare, education, personal, travel, insurance, gifts, bills, other-expense)
+      - Suggested category (housing, transportation, groceries, utilities, entertainment, food, shopping, healthcare, education, personal, travel, insurance, gifts, bills, other-expense)
 
-      Only respond with valid JSON in this exact format:
+      Respond in this format:
       {
         "amount": number,
         "date": "ISO date string",
@@ -136,7 +126,7 @@ export async function scanReciept({ base64, mimetype }) {
       {
         inlineData: {
           data: base64,
-          mimeType:mimetype,
+          mimeType: mimetype,
         },
       },
       prompt,
@@ -159,48 +149,42 @@ export async function scanReciept({ base64, mimetype }) {
       console.error("Error parsing JSON response:", parseError);
       throw new Error("Invalid response format from Gemini");
     }
-
   } catch (error) {
     console.error("Error scanning receipt:", error);
     throw new Error("Failed to scan receipt");
   }
 }
 
-export async function getTransaction(id){
-     const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
+export async function getTransaction(id) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthorized");
 
-    const user = await db.user.findUnique({
-      where: { clerkUserId: userId },
-    });
+  const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+  if (!user) throw new Error("User not found");
 
-    if (!user) {
-      throw new Error("User not found");
-    }
-    const transaction =await db.transaction.findUnique({
-      where:{
-        id,
-        userId:user.id,
-      }
-    });
-    if(!transaction)throw new Error("Transaction not Found");
-    return serializeAmount(transaction);
-  
+  const transaction = await db.transaction.findUnique({
+    where: {
+      id,
+      userId: user.id,
+    },
+  });
+
+  if (!transaction) throw new Error("Transaction not found");
+
+  return serializeAmount(transaction);
 }
-export async function updateTransaction(id,data){
+
+export async function updateTransaction(id, data) {
   try {
-     const { userId } = await auth();
+    const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
 
-    const user = await db.user.findUnique({
-      where: { clerkUserId: userId },
-    });
+    const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+    if (!user) throw new Error("User not found");
 
-    if (!user) {
-      throw new Error("User not found");
-    }
-     const originalTransaction = await db.transaction.findUnique({
+    const originalTransaction = await db.transaction.findUnique({
       where: {
+        id,
         userId: user.id,
       },
       include: {
@@ -208,19 +192,19 @@ export async function updateTransaction(id,data){
       },
     });
 
-    if(!originalTransaction) throw new Error("Transaction not Found");
+    if (!originalTransaction) throw new Error("Transaction not found");
 
-      const oldBalanceChange =
-        originalTransaction.type === "EXPENSE"
+    const oldBalanceChange =
+      originalTransaction.type === "EXPENSE"
         ? -originalTransaction.amount.toNumber()
         : originalTransaction.amount.toNumber();
 
-      const newBalanceChange =
+    const newBalanceChange =
       data.type === "EXPENSE" ? -data.amount : data.amount;
 
     const netBalanceChange = newBalanceChange - oldBalanceChange;
 
-     const transaction = await db.$transaction(async (tx) => {
+    const transaction = await db.$transaction(async (tx) => {
       const updated = await tx.transaction.update({
         where: {
           id,
@@ -235,7 +219,6 @@ export async function updateTransaction(id,data){
         },
       });
 
-      // Update account balance
       await tx.account.update({
         where: { id: data.accountId },
         data: {
@@ -252,9 +235,6 @@ export async function updateTransaction(id,data){
     revalidatePath(`/account/${data.accountId}`);
 
     return { success: true, data: serializeAmount(transaction) };
-
-      
-    
   } catch (error) {
     throw new Error(error.message);
   }

@@ -2,11 +2,13 @@ import { getAccountTransactions } from '@/actions/accounts';
 import TransactionTable from '@/components/transaction-table';
 import { notFound } from 'next/navigation';
 import React, { Suspense } from 'react';
-import { BarLoader } from 'react-spinners';
 import AccountChart from '../../dashboard/_components/account-chart';
 
 export default async function AccountPage({ params }) {
-  const accountData = await getAccountTransactions(params.id);
+  // Await params to fix the Next.js error
+  const { id } = await params;
+
+  const accountData = await getAccountTransactions(id);
 
   if (!accountData) {
     notFound();
@@ -34,20 +36,13 @@ export default async function AccountPage({ params }) {
         </div>
       </div>
 
-      <Suspense>
-      <AccountChart transactions={accountData.transactions}/>
-      </Suspense> 
+      <Suspense fallback={<div>Loading Chart...</div>}>
+        <AccountChart transactions={accountData.transactions} />
+      </Suspense>
 
-
-
-
-
-      <Suspense>
-      <TransactionTable transactions={accountData.transactions} />
-      </Suspense> 
-      
-
-      
+      <Suspense fallback={<div>Loading Transactions...</div>}>
+        <TransactionTable transactions={accountData.transactions} />
+      </Suspense>
     </div>
   );
 }
