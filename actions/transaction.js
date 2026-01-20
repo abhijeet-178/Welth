@@ -1,12 +1,12 @@
 "use server";
 
-const aj = require("@/app/lib/arcjet");
-const { db } = require("@/lib/prisma");
-const { auth } = require("@clerk/nextjs/server");
-const { GoogleGenerativeAI } = require("@google/generative-ai");
-const { revalidatePath } = require("next/cache");
-const { headers } = require("next/headers");
-const { Decimal } = require("@prisma/client/runtime");
+import { protect } from "@/app/lib/arcjet";
+import { db } from "@/lib/prisma";
+import { auth } from "@clerk/nextjs/server";
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { revalidatePath } from "next/cache";
+import { headers } from "next/headers";
+import { Prisma } from "@prisma/client";
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
@@ -23,7 +23,8 @@ function serializePrismaObject(obj) {
     const result = {};
     for (const key in obj) {
       const value = obj[key];
-      if (value instanceof Decimal) {
+
+      if (value instanceof Prisma.Decimal) {
         result[key] = value.toNumber();
       } else if (value instanceof Date) {
         result[key] = value.toISOString();
@@ -51,7 +52,7 @@ async function createTransaction(data) {
       headers: reqHeaders,
     });
 
-    const decision = await aj.protect(req, { userId, requested: 1 });
+    const decision = await protect(req, { userId, requested: 1 });
 
     if (decision.isDenied()) {
       if (decision.reason.isRateLimit()) {
@@ -60,7 +61,9 @@ async function createTransaction(data) {
       throw new Error("Request Blocked");
     }
 
-    const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+    const user = await db.user.findUnique({
+      where: { clerkUserId: userId },
+    });
     if (!user) throw new Error("User not found");
 
     const account = await db.account.findFirst({
@@ -68,8 +71,11 @@ async function createTransaction(data) {
     });
     if (!account) throw new Error("Account not found");
 
-    const balanceChange = data.type === "EXPENSE" ? -data.amount : data.amount;
-    const newBalance = account.balance.toNumber() + balanceChange;
+    const balanceChange =
+      data.type === "EXPENSE" ? -data.amount : data.amount;
+
+    const newBalance =
+      account.balance.toNumber() + balanceChange;
 
     const transaction = await db.$transaction(async (tx) => {
       const newTransaction = await tx.transaction.create({
@@ -78,7 +84,10 @@ async function createTransaction(data) {
           userId: user.id,
           nextRecurringDate:
             data.isRecurring && data.recurringInterval
-              ? calculateNextRecurringDate(data.date, data.recurringInterval)
+              ? calculateNextRecurringDate(
+                  data.date,
+                  data.recurringInterval
+                )
               : null,
         },
       });
@@ -96,8 +105,9 @@ async function createTransaction(data) {
 
     return { success: true, data: serializePrismaObject(transaction) };
   } catch (error) {
-    if (error instanceof Error) throw error;
-    throw new Error("Unexpected error creating transaction");
+    throw error instanceof Error
+      ? error
+      : new Error("Unexpected error creating transaction");
   }
 }
 
@@ -105,7 +115,9 @@ async function getTransaction(id) {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
-  const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+  const user = await db.user.findUnique({
+    where: { clerkUserId: userId },
+  });
   if (!user) throw new Error("User not found");
 
   const transaction = await db.transaction.findFirst({
@@ -122,7 +134,9 @@ async function updateTransaction(id, data) {
     const { userId } = await auth();
     if (!userId) throw new Error("Unauthorized");
 
-    const user = await db.user.findUnique({ where: { clerkUserId: userId } });
+    const user = await db.user.findUnique({
+      where: { clerkUserId: userId },
+    });
     if (!user) throw new Error("User not found");
 
     const originalTransaction = await db.transaction.findFirst({
@@ -137,7 +151,8 @@ async function updateTransaction(id, data) {
         ? -originalTransaction.amount.toNumber()
         : originalTransaction.amount.toNumber();
 
-    const newChange = data.type === "EXPENSE" ? -data.amount : data.amount;
+    const newChange =
+      data.type === "EXPENSE" ? -data.amount : data.amount;
 
     const netChange = newChange - oldChange;
 
@@ -148,7 +163,10 @@ async function updateTransaction(id, data) {
           ...data,
           nextRecurringDate:
             data.isRecurring && data.recurringInterval
-              ? calculateNextRecurringDate(data.date, data.recurringInterval)
+              ? calculateNextRecurringDate(
+                  data.date,
+                  data.recurringInterval
+                )
               : null,
         },
       });
@@ -166,12 +184,14 @@ async function updateTransaction(id, data) {
 
     return { success: true, data: serializePrismaObject(transaction) };
   } catch (error) {
-    if (error instanceof Error) throw error;
-    throw new Error("Unexpected error updating transaction");
+    throw error instanceof Error
+      ? error
+      : new Error("Unexpected error updating transaction");
   }
 }
 
 /** ---------------- RECURRENT DATE CALCULATION ---------------- */
+
 function calculateNextRecurringDate(startDate, interval) {
   const date = new Date(startDate);
 
@@ -194,9 +214,12 @@ function calculateNextRecurringDate(startDate, interval) {
 }
 
 /** ---------------- RECEIPT SCANNING ---------------- */
+
 async function scanReciept({ base64, mimetype }) {
   try {
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+    const model = genAI.getGenerativeModel({
+      model: "gemini-2.5-flash",
+    });
 
     const prompt = `
 Analyze this receipt image and extract the following information in JSON format:
@@ -232,7 +255,8 @@ If it's not a receipt, return an empty object.
 }
 
 /** ---------------- EXPORTS ---------------- */
-module.exports = {
+
+export default {
   createTransaction,
   getTransaction,
   updateTransaction,
