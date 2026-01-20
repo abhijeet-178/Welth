@@ -1,4 +1,4 @@
-"use server";
+"use server"
 
 import { protect } from "@/app/lib/arcjet";
 import { db } from "@/lib/prisma";
