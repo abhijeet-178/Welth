@@ -1,4 +1,4 @@
-"use server"
+"use server";
 
 import { protect } from "@/app/lib/arcjet";
 import { db } from "@/lib/prisma";
@@ -42,76 +42,70 @@ function serializePrismaObject(obj) {
 
 /** ---------------- TRANSACTION FUNCTIONS ---------------- */
 
-async function createTransaction(data) {
-  try {
-    const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
+export async function createTransaction(data) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthorized");
 
-    const reqHeaders = headers();
-    const req = new Request("http://internal/transaction", {
-      headers: reqHeaders,
-    });
+  const reqHeaders = headers();
+  const req = new Request("http://internal/transaction", {
+    headers: reqHeaders,
+  });
 
-    const decision = await protect(req, { userId, requested: 1 });
+  const decision = await protect(req, { userId, requested: 1 });
 
-    if (decision.isDenied()) {
-      if (decision.reason.isRateLimit()) {
-        throw new Error("Too many requests. Please try again later.");
-      }
-      throw new Error("Request Blocked");
+  if (decision.isDenied()) {
+    if (decision.reason.isRateLimit()) {
+      throw new Error("Too many requests. Please try again later.");
     }
-
-    const user = await db.user.findUnique({
-      where: { clerkUserId: userId },
-    });
-    if (!user) throw new Error("User not found");
-
-    const account = await db.account.findFirst({
-      where: { id: data.accountId, userId: user.id },
-    });
-    if (!account) throw new Error("Account not found");
-
-    const balanceChange =
-      data.type === "EXPENSE" ? -data.amount : data.amount;
-
-    const newBalance =
-      account.balance.toNumber() + balanceChange;
-
-    const transaction = await db.$transaction(async (tx) => {
-      const newTransaction = await tx.transaction.create({
-        data: {
-          ...data,
-          userId: user.id,
-          nextRecurringDate:
-            data.isRecurring && data.recurringInterval
-              ? calculateNextRecurringDate(
-                  data.date,
-                  data.recurringInterval
-                )
-              : null,
-        },
-      });
-
-      await tx.account.update({
-        where: { id: data.accountId },
-        data: { balance: newBalance },
-      });
-
-      return newTransaction;
-    });
-
-    revalidatePath("/dashboard");
-    revalidatePath(`/account/${transaction.accountId}`);
-
-    return { success: true, data: serializePrismaObject(transaction) };
-  } catch (error) {
-    throw error instanceof Error
-      ? error
-      : new Error("Unexpected error creating transaction");
+    throw new Error("Request Blocked");
   }
+
+  const user = await db.user.findUnique({
+    where: { clerkUserId: userId },
+  });
+  if (!user) throw new Error("User not found");
+
+  const account = await db.account.findFirst({
+    where: { id: data.accountId, userId: user.id },
+  });
+  if (!account) throw new Error("Account not found");
+
+  const balanceChange =
+    data.type === "EXPENSE" ? -data.amount : data.amount;
+
+  const newBalance =
+    account.balance.toNumber() + balanceChange;
+
+  const transaction = await db.$transaction(async (tx) => {
+    const newTransaction = await tx.transaction.create({
+      data: {
+        ...data,
+        userId: user.id,
+        nextRecurringDate:
+          data.isRecurring && data.recurringInterval
+            ? calculateNextRecurringDate(
+                data.date,
+                data.recurringInterval
+              )
+            : null,
+      },
+    });
+
+    await tx.account.update({
+      where: { id: data.accountId },
+      data: { balance: newBalance },
+    });
+
+    return newTransaction;
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath(`/account/${transaction.accountId}`);
+
+  return { success: true, data: serializePrismaObject(transaction) };
 }
 
-async function getTransaction(id) {
+export async function getTransaction(id) {
   const { userId } = await auth();
   if (!userId) throw new Error("Unauthorized");
 
@@ -129,65 +123,59 @@ async function getTransaction(id) {
   return serializePrismaObject(transaction);
 }
 
-async function updateTransaction(id, data) {
-  try {
-    const { userId } = await auth();
-    if (!userId) throw new Error("Unauthorized");
+export async function updateTransaction(id, data) {
+  const { userId } = await auth();
+  if (!userId) throw new Error("Unauthorized");
 
-    const user = await db.user.findUnique({
-      where: { clerkUserId: userId },
-    });
-    if (!user) throw new Error("User not found");
+  const user = await db.user.findUnique({
+    where: { clerkUserId: userId },
+  });
+  if (!user) throw new Error("User not found");
 
-    const originalTransaction = await db.transaction.findFirst({
-      where: { id, userId: user.id },
-      include: { account: true },
-    });
+  const originalTransaction = await db.transaction.findFirst({
+    where: { id, userId: user.id },
+    include: { account: true },
+  });
 
-    if (!originalTransaction) throw new Error("Transaction not found");
+  if (!originalTransaction) throw new Error("Transaction not found");
 
-    const oldChange =
-      originalTransaction.type === "EXPENSE"
-        ? -originalTransaction.amount.toNumber()
-        : originalTransaction.amount.toNumber();
+  const oldChange =
+    originalTransaction.type === "EXPENSE"
+      ? -originalTransaction.amount.toNumber()
+      : originalTransaction.amount.toNumber();
 
-    const newChange =
-      data.type === "EXPENSE" ? -data.amount : data.amount;
+  const newChange =
+    data.type === "EXPENSE" ? -data.amount : data.amount;
 
-    const netChange = newChange - oldChange;
+  const netChange = newChange - oldChange;
 
-    const transaction = await db.$transaction(async (tx) => {
-      const updated = await tx.transaction.update({
-        where: { id },
-        data: {
-          ...data,
-          nextRecurringDate:
-            data.isRecurring && data.recurringInterval
-              ? calculateNextRecurringDate(
-                  data.date,
-                  data.recurringInterval
-                )
-              : null,
-        },
-      });
-
-      await tx.account.update({
-        where: { id: data.accountId },
-        data: { balance: { increment: netChange } },
-      });
-
-      return updated;
+  const transaction = await db.$transaction(async (tx) => {
+    const updated = await tx.transaction.update({
+      where: { id },
+      data: {
+        ...data,
+        nextRecurringDate:
+          data.isRecurring && data.recurringInterval
+            ? calculateNextRecurringDate(
+                data.date,
+                data.recurringInterval
+              )
+            : null,
+      },
     });
 
-    revalidatePath("/dashboard");
-    revalidatePath(`/account/${data.accountId}`);
+    await tx.account.update({
+      where: { id: data.accountId },
+      data: { balance: { increment: netChange } },
+    });
 
-    return { success: true, data: serializePrismaObject(transaction) };
-  } catch (error) {
-    throw error instanceof Error
-      ? error
-      : new Error("Unexpected error updating transaction");
-  }
+    return updated;
+  });
+
+  revalidatePath("/dashboard");
+  revalidatePath(`/account/${data.accountId}`);
+
+  return { success: true, data: serializePrismaObject(transaction) };
 }
 
 /** ---------------- RECURRENT DATE CALCULATION ---------------- */
@@ -215,13 +203,12 @@ function calculateNextRecurringDate(startDate, interval) {
 
 /** ---------------- RECEIPT SCANNING ---------------- */
 
-async function scanReciept({ base64, mimetype }) {
-  try {
-    const model = genAI.getGenerativeModel({
-      model: "gemini-2.5-flash",
-    });
+export async function scanReciept({ base64, mimetype }) {
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash",
+  });
 
-    const prompt = `
+  const prompt = `
 Analyze this receipt image and extract the following information in JSON format:
 {
   "amount": number,
@@ -233,32 +220,22 @@ Analyze this receipt image and extract the following information in JSON format:
 If it's not a receipt, return an empty object.
 `;
 
-    const result = await model.generateContent([
-      { inlineData: { data: base64, mimeType: mimetype } },
-      prompt,
-    ]);
+  const result = await model.generateContent([
+    { inlineData: { data: base64, mimeType: mimetype } },
+    prompt,
+  ]);
 
-    const text = await result.response.text();
-    const cleanedText = text.replace(/```(?:json)?/g, "").trim();
-    const parsed = JSON.parse(cleanedText);
+  const text = await result.response.text();
+  const cleanedText = text.replace(/```(?:json)?/g, "").trim();
+  const parsed = JSON.parse(cleanedText);
 
-    return {
-      amount: Number(parsed.amount),
-      date: new Date(parsed.date),
-      description: parsed.description,
-      merchantName: parsed.merchantName,
-      category: parsed.category,
-    };
-  } catch {
-    throw new Error("Failed to scan receipt");
-  }
+  return {
+    amount: Number(parsed.amount),
+    date: new Date(parsed.date),
+    description: parsed.description,
+    merchantName: parsed.merchantName,
+    category: parsed.category,
+  };
 }
 
-/** ---------------- EXPORTS ---------------- */
-
-export default {
-  createTransaction,
-  getTransaction,
-  updateTransaction,
-  scanReciept,
 };
