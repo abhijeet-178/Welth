@@ -237,5 +237,3 @@ If it's not a receipt, return an empty object.
     category: parsed.category,
   };
 }
-
-};
